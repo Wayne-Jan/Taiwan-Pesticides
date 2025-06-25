@@ -159,20 +159,36 @@ class PesticideSplitter:
             return None
     
     def fetch_usage_range_data(self, pestcd, cidecd, pescnt, compno, regtid, regtno):
-        """Fetch usage range data from /Userange/ endpoint"""
+        """Fetch usage range data from /UserangeList/ endpoint"""
         try:
-            url = f"{self.base_url}/information/Query/Userange/"
-            params = {
-                'pestcd': pestcd,
-                'cidecd': cidecd,
-                'pescnt': pescnt,
-                'compno': compno,
-                'regtid': regtid,
-                'regtno': regtno,
-                'newquery': 'true'
-            }
+            # Use the correct endpoint that loads the actual data
+            url = f"{self.base_url}/information/Query/UserangeList/"
             
-            response = self.session.get(url, params=params)
+            # For general pesticide usage, we can use just pestcd
+            # For specific product usage, we need all parameters
+            if regtno and regtid:
+                params = {
+                    'pestcd': pestcd,
+                    'cidecd': cidecd,
+                    'pescnt': pescnt,
+                    'compno': compno,
+                    'regtid': regtid,
+                    'regtno': regtno,
+                    'newquery': 'true'
+                }
+            else:
+                # Simpler query for all usage of a pesticide
+                params = {
+                    'pestcd': pestcd,
+                    'newquery': 'true'
+                }
+            
+            # Add AJAX headers since this is loaded via jQuery
+            headers = self.headers.copy()
+            headers['X-Requested-With'] = 'XMLHttpRequest'
+            headers['Referer'] = f'{self.base_url}/information/Query/Userange/?pestcd={pestcd}&newquery=true'
+            
+            response = self.session.get(url, params=params, headers=headers)
             print(f"      Request URL: {response.url}")
             if response.status_code != 200:
                 print(f"      Error fetching usage range: HTTP {response.status_code}")
@@ -180,36 +196,38 @@ class PesticideSplitter:
             
             soup = BeautifulSoup(response.text, 'html.parser')
             
-            # Find the usage range table
-            table_div = soup.find('div', class_='table-data-list')
-            if not table_div:
-                return []
-            
-            table = table_div.find('table')
-            if not table or not table.find('tbody'):
+            # Find all tables (there can be multiple tables for different formulations)
+            tables = soup.find_all('table')
+            if not tables:
                 return []
             
             usage_ranges = []
-            rows = table.find('tbody').find_all('tr')
             
-            for row in rows:
-                cells = row.find_all('td')
-                if len(cells) >= 12:  # Ensure we have enough columns
-                    usage_range = {
-                        'crop': cells[0].get_text(strip=True),
-                        'pest_disease': cells[1].get_text(strip=True),
-                        'dosage_per_hectare': cells[2].get_text(strip=True),
-                        'dilution_ratio': cells[3].get_text(strip=True),
-                        'application_timing': cells[4].get_text(strip=True),
-                        'application_interval': cells[5].get_text(strip=True),
-                        'max_applications': cells[6].get_text(strip=True),
-                        'pre_harvest_interval': cells[7].get_text(strip=True),
-                        'application_method': cells[8].get_text(strip=True),
-                        'precautions': cells[9].get_text(strip=True),
-                        'notes': cells[10].get_text(strip=True),
-                        'approval_date': cells[11].get_text(strip=True) if len(cells) > 11 else ''
-                    }
-                    usage_ranges.append(usage_range)
+            for table in tables:
+                rows = table.find_all('tr')
+                if len(rows) <= 1:  # Skip if only header row
+                    continue
+                    
+                # Skip header row, process data rows
+                for row in rows[1:]:
+                    cells = row.find_all('td')
+                    if len(cells) >= 12:  # Ensure we have enough columns
+                        usage_range = {
+                            'crop': cells[0].get_text(strip=True),
+                            'pest_disease': cells[1].get_text(strip=True),
+                            'dosage_per_hectare': cells[2].get_text(strip=True),
+                            'dilution_ratio': cells[3].get_text(strip=True),
+                            'application_timing': cells[4].get_text(strip=True),
+                            'application_interval': cells[5].get_text(strip=True),
+                            'max_applications': cells[6].get_text(strip=True),
+                            'pre_harvest_interval': cells[7].get_text(strip=True),
+                            'application_method': cells[8].get_text(strip=True),
+                            'precautions': cells[9].get_text(strip=True),
+                            'notes': cells[10].get_text(strip=True),
+                            'approval_date': cells[11].get_text(strip=True) if len(cells) > 11 else '',
+                            'original_registrar': cells[12].get_text(strip=True) if len(cells) > 12 else ''
+                        }
+                        usage_ranges.append(usage_range)
             
             return usage_ranges
             
@@ -223,11 +241,11 @@ class PesticideSplitter:
             return None
             
         try:
-            # Create pesticide-specific image directory with full name
+            # Create unified pesticide directory for all files
             safe_pest_name = re.sub(r'[^\w\-_\u4e00-\u9fff]', '_', pest_name)
             folder_name = f"{pest_code}_{safe_pest_name}"
-            image_dir = f"data/images/{folder_name}"
-            os.makedirs(image_dir, exist_ok=True)
+            pest_dir = f"data/pesticides/{folder_name}"
+            os.makedirs(pest_dir, exist_ok=True)
             
             # Get full URL if it's a relative path
             if image_url.startswith('/'):
@@ -263,7 +281,7 @@ class PesticideSplitter:
                     name, ext = os.path.splitext(safe_filename)
                     safe_filename = f"{permit_num}_{safe_filename}"
                 
-                file_path = os.path.join(image_dir, safe_filename)
+                file_path = os.path.join(pest_dir, safe_filename)
                 
                 # Save image
                 with open(file_path, 'wb') as f:
@@ -310,60 +328,39 @@ class PesticideSplitter:
             all_usage_ranges = []
             current_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             
-            for registration in registrations:
-                # Extract parameters needed for usage range query
-                permit_number = registration.get('permit_number', '')
-                concentration = registration.get('concentration', '')
-                regtid = registration.get('regtid', '10')
-                regtno = registration.get('regtno', '')
-                
-                # Extract formulation code from formulation_type
-                formulation_type = registration.get('formulation_type', '')
-                cidecd = formulation_type.split()[0] if formulation_type else 'WP'
-                if len(cidecd) < 4:
-                    cidecd = cidecd.ljust(4)  # Pad to 4 characters
-                
-                # Extract numeric concentration
-                pescnt = '0.000'
-                if concentration:
-                    import re
-                    numbers = re.findall(r'[\d.]+', concentration)
-                    if numbers:
-                        pescnt = f"{float(numbers[0]):.3f}"
-                
-                # Get company number from manufacturer info - try known working examples first
-                compno = '99657438'  # Known working value from README example for permit 03877
-                if regtno == '04433':
-                    compno = '99667762'  # Known working value from README example for permit 04433
-                
-                print(f"    Fetching usage range for {permit_number}...")
-                print(f"      Parameters: pestcd={pest_code}, cidecd={cidecd}, pescnt={pescnt}, compno={compno}, regtid={regtid}, regtno={regtno}")
-                
-                usage_ranges = self.fetch_usage_range_data(
-                    pestcd=pest_code,
-                    cidecd=cidecd,
-                    pescnt=pescnt,
-                    compno=compno,
-                    regtid=regtid,
-                    regtno=regtno
-                )
-                
-                # Add registration context to each usage range
-                for usage_range in usage_ranges:
-                    usage_range.update({
-                        'pesticide_code': pest_code,
-                        'pesticide_name': pest_name,
-                        'permit_number': permit_number,
-                        'brand_name': registration.get('brand_name', ''),
-                        'formulation_type': formulation_type,
-                        'concentration': concentration,
-                        'manufacturer': registration.get('manufacturer', ''),
-                        'data_source': 'Taiwan Pesticide Database - Usage Range',
-                        'fetch_time': current_date
-                    })
-                
-                all_usage_ranges.extend(usage_ranges)
-                time.sleep(0.3)  # Be respectful to server
+            # First, get general usage range for the pesticide (all formulations)
+            print(f"    Fetching general usage range for {pest_code}...")
+            general_usage_ranges = self.fetch_usage_range_data(
+                pestcd=pest_code,
+                cidecd='',
+                pescnt='',
+                compno='',
+                regtid='',
+                regtno=''
+            )
+            
+            print(f"      Found {len(general_usage_ranges)} general usage records")
+            
+            # Process and add registration context to usage ranges
+            for usage_range in general_usage_ranges:
+                # For general usage, we'll match with registrations based on formulation/concentration
+                usage_range.update({
+                    'pesticide_code': pest_code,
+                    'pesticide_name': pest_name,
+                    'permit_number': 'General',  # General usage not tied to specific permit
+                    'brand_name': 'Various',
+                    'formulation_type': 'Various',
+                    'concentration': 'Various',
+                    'manufacturer': 'Various',
+                    'data_source': 'Taiwan Pesticide Database - Usage Range',
+                    'fetch_time': current_date
+                })
+            
+            all_usage_ranges.extend(general_usage_ranges)
+            
+            # Optionally, also get specific registration usage (commented out to avoid redundancy)
+            # for registration in registrations[:5]:  # Limit to first 5 to avoid too many requests
+            #     ... specific registration code ...
             
             if not all_usage_ranges:
                 print(f"    No usage range data found for {pest_code}")
@@ -785,12 +782,15 @@ def main():
             print(f"Total CSV records: {total_records}")
             print(f"Total registrations: {total_registrations}")
             print(f"Total images downloaded: {total_images}")
-            print(f"Data saved to: data/pesticides/[CODE_NAME]/")
-            print(f"Images saved to: data/images/[CODE_NAME]/")
             
             if usage_range_results:
                 total_usage_ranges = sum(r['usage_range_count'] for r in usage_range_results)
                 print(f"Total usage range records: {total_usage_ranges}")
+            
+            print(f"All data saved to: data/pesticides/[CODE_NAME]/")
+            print(f"  - Registration CSV: [CODE_NAME].csv")
+            print(f"  - Usage range CSV: [CODE_NAME]_usage_range.csv")
+            print(f"  - Label images: *.jpg")
             
             # Show sample results
             print(f"\\nSample results:")

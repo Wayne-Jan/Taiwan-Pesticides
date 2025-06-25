@@ -119,17 +119,15 @@ data/
 │   └── ...
 ├── pesticides/     # 個別農藥資料 (split_pesticides_with_images.py)
 │   ├── A001_三亞蟎AMITRAZ/
-│   │   └── A001_三亞蟎AMITRAZ.csv
-│   ├── F011_三賽唑TRICYCLAZOLE/
-│   │   └── F011_三賽唑TRICYCLAZOLE.csv
-│   └── ...
-├── images/         # 農藥標示圖片
-│   ├── A001_三亞蟎AMITRAZ/
-│   │   ├── 01196_10-01196-1031485957-S001.jpg
+│   │   ├── A001_三亞蟎AMITRAZ.csv                    # 農藥註冊資料
+│   │   ├── A001_三亞蟎AMITRAZ_usage_range.csv        # 使用範圍資料
+│   │   ├── 01196_10-01196-1031485957-S001.jpg        # 標示圖片
 │   │   ├── 01197_10-01197-1131873707-S001.jpg
 │   │   └── ...
 │   ├── F011_三賽唑TRICYCLAZOLE/
-│   │   ├── 03877_10-03877-tmpH010804-S002.jpg
+│   │   ├── F011_三賽唑TRICYCLAZOLE.csv                # 農藥註冊資料
+│   │   ├── F011_三賽唑TRICYCLAZOLE_usage_range.csv    # 使用範圍資料
+│   │   ├── 03877_10-03877-tmpH010804-S002.jpg        # 標示圖片
 │   │   └── ...
 │   └── ...
 └── regulatory/     # 法規資料
