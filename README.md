@@ -35,11 +35,22 @@
 ## 使用方法
 
 ### 環境設置
+
+#### WSL/Linux 環境
+```bash
+# 建立虛擬環境
+python3 -m venv venv
+source venv/bin/activate
+
+# 安裝依賴
+pip install -r requirements.txt
+```
+
+#### Windows 環境
 ```bash
 # 建立虛擬環境
 python -m venv venv
-source venv/bin/activate  # Linux/Mac
-# 或 venv\Scripts\activate  # Windows
+venv\Scripts\activate
 
 # 安裝依賴
 pip install -r requirements.txt
@@ -79,6 +90,9 @@ python split_pesticides_with_images.py --images-only
 
 # 跳過圖片下載
 python split_pesticides_with_images.py --no-images
+
+# 僅創建使用範圍CSV檔案
+python split_pesticides_with_images.py --usage-range-only
 ```
 
 ### 參數說明
@@ -94,6 +108,7 @@ python split_pesticides_with_images.py --no-images
 - `--codes`: 指定處理的農藥代碼列表
 - `--no-images`: 跳過標示圖片下載
 - `--images-only`: 僅下載圖片，跳過已存在的CSV檔案
+- `--usage-range-only`: 僅創建使用範圍CSV檔案
 
 ### 輸出檔案結構
 ```

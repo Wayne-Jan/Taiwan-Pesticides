@@ -158,6 +158,65 @@ class PesticideSplitter:
             print(f"      Error getting image URL for {regtid}/{regtno}: {e}")
             return None
     
+    def fetch_usage_range_data(self, pestcd, cidecd, pescnt, compno, regtid, regtno):
+        """Fetch usage range data from /Userange/ endpoint"""
+        try:
+            url = f"{self.base_url}/information/Query/Userange/"
+            params = {
+                'pestcd': pestcd,
+                'cidecd': cidecd,
+                'pescnt': pescnt,
+                'compno': compno,
+                'regtid': regtid,
+                'regtno': regtno,
+                'newquery': 'true'
+            }
+            
+            response = self.session.get(url, params=params)
+            print(f"      Request URL: {response.url}")
+            if response.status_code != 200:
+                print(f"      Error fetching usage range: HTTP {response.status_code}")
+                return []
+            
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Find the usage range table
+            table_div = soup.find('div', class_='table-data-list')
+            if not table_div:
+                return []
+            
+            table = table_div.find('table')
+            if not table or not table.find('tbody'):
+                return []
+            
+            usage_ranges = []
+            rows = table.find('tbody').find_all('tr')
+            
+            for row in rows:
+                cells = row.find_all('td')
+                if len(cells) >= 12:  # Ensure we have enough columns
+                    usage_range = {
+                        'crop': cells[0].get_text(strip=True),
+                        'pest_disease': cells[1].get_text(strip=True),
+                        'dosage_per_hectare': cells[2].get_text(strip=True),
+                        'dilution_ratio': cells[3].get_text(strip=True),
+                        'application_timing': cells[4].get_text(strip=True),
+                        'application_interval': cells[5].get_text(strip=True),
+                        'max_applications': cells[6].get_text(strip=True),
+                        'pre_harvest_interval': cells[7].get_text(strip=True),
+                        'application_method': cells[8].get_text(strip=True),
+                        'precautions': cells[9].get_text(strip=True),
+                        'notes': cells[10].get_text(strip=True),
+                        'approval_date': cells[11].get_text(strip=True) if len(cells) > 11 else ''
+                    }
+                    usage_ranges.append(usage_range)
+            
+            return usage_ranges
+            
+        except Exception as e:
+            print(f"      Error fetching usage range data: {e}")
+            return []
+    
     def download_pesticide_image(self, image_url, pest_code, pest_name, permit_number, download_date):
         """Download and organize pesticide label image"""
         if not image_url:
@@ -222,6 +281,120 @@ class PesticideSplitter:
             print(f"    Error downloading image {image_url}: {e}")
         
         return None
+    
+    def create_usage_range_csv(self, pest_code, pest_data):
+        """Create usage range CSV for one pesticide"""
+        try:
+            # Get basic pesticide info
+            basic_info = pest_data['basic_info']
+            pest_name = basic_info['pesticide_name']
+            
+            print(f"  Creating usage range CSV for {pest_code}: {pest_name}")
+            
+            # Get fresh registration data to extract parameters
+            fresh_registrations = self.fetch_registration_data_with_images(pest_code)
+            
+            # Combine existing and fresh data
+            all_registrations = pest_data.get('registrations', []) + fresh_registrations
+            
+            # Remove duplicates based on permit number
+            unique_registrations = {}
+            for reg in all_registrations:
+                permit_num = reg.get('permit_number', '')
+                if permit_num and permit_num not in unique_registrations:
+                    unique_registrations[permit_num] = reg
+            
+            registrations = list(unique_registrations.values())
+            
+            # Collect all usage range data
+            all_usage_ranges = []
+            current_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            for registration in registrations:
+                # Extract parameters needed for usage range query
+                permit_number = registration.get('permit_number', '')
+                concentration = registration.get('concentration', '')
+                regtid = registration.get('regtid', '10')
+                regtno = registration.get('regtno', '')
+                
+                # Extract formulation code from formulation_type
+                formulation_type = registration.get('formulation_type', '')
+                cidecd = formulation_type.split()[0] if formulation_type else 'WP'
+                if len(cidecd) < 4:
+                    cidecd = cidecd.ljust(4)  # Pad to 4 characters
+                
+                # Extract numeric concentration
+                pescnt = '0.000'
+                if concentration:
+                    import re
+                    numbers = re.findall(r'[\d.]+', concentration)
+                    if numbers:
+                        pescnt = f"{float(numbers[0]):.3f}"
+                
+                # Get company number from manufacturer info - try known working examples first
+                compno = '99657438'  # Known working value from README example for permit 03877
+                if regtno == '04433':
+                    compno = '99667762'  # Known working value from README example for permit 04433
+                
+                print(f"    Fetching usage range for {permit_number}...")
+                print(f"      Parameters: pestcd={pest_code}, cidecd={cidecd}, pescnt={pescnt}, compno={compno}, regtid={regtid}, regtno={regtno}")
+                
+                usage_ranges = self.fetch_usage_range_data(
+                    pestcd=pest_code,
+                    cidecd=cidecd,
+                    pescnt=pescnt,
+                    compno=compno,
+                    regtid=regtid,
+                    regtno=regtno
+                )
+                
+                # Add registration context to each usage range
+                for usage_range in usage_ranges:
+                    usage_range.update({
+                        'pesticide_code': pest_code,
+                        'pesticide_name': pest_name,
+                        'permit_number': permit_number,
+                        'brand_name': registration.get('brand_name', ''),
+                        'formulation_type': formulation_type,
+                        'concentration': concentration,
+                        'manufacturer': registration.get('manufacturer', ''),
+                        'data_source': 'Taiwan Pesticide Database - Usage Range',
+                        'fetch_time': current_date
+                    })
+                
+                all_usage_ranges.extend(usage_ranges)
+                time.sleep(0.3)  # Be respectful to server
+            
+            if not all_usage_ranges:
+                print(f"    No usage range data found for {pest_code}")
+                return None
+            
+            # Create DataFrame
+            df = pd.DataFrame(all_usage_ranges)
+            
+            # Create pesticide-specific directory
+            safe_pest_name = re.sub(r'[^\w\-_\u4e00-\u9fff]', '_', pest_name)
+            folder_name = f"{pest_code}_{safe_pest_name}"
+            pest_dir = f"data/pesticides/{folder_name}"
+            os.makedirs(pest_dir, exist_ok=True)
+            
+            # Save usage range CSV
+            csv_filename = f"{pest_code}_{safe_pest_name}_usage_range.csv"
+            csv_path = os.path.join(pest_dir, csv_filename)
+            
+            df.to_csv(csv_path, index=False, encoding='utf-8-sig')
+            
+            print(f"    Saved usage range CSV: {csv_path} ({len(all_usage_ranges)} records)")
+            
+            return {
+                'csv_path': csv_path,
+                'usage_range_count': len(all_usage_ranges),
+                'registration_count': len(registrations)
+            }
+            
+        except Exception as e:
+            print(f"    Error creating usage range CSV for {pest_code}: {e}")
+            return None
     
     def create_pesticide_csv(self, pest_code, pest_data, download_images=True):
         """Create individual CSV for one pesticide with all its data"""
@@ -493,6 +666,8 @@ def main():
                         help='Skip downloading label images')
     parser.add_argument('--images-only', action='store_true',
                         help='Only download images, skip if CSV already exists')
+    parser.add_argument('--usage-range-only', action='store_true',
+                        help='Only create usage range CSV files')
     
     args = parser.parse_args()
     
@@ -529,52 +704,99 @@ def main():
     # Process each pesticide
     download_images = not args.no_images
     results = []
+    usage_range_results = []
     
     print(f"\\nStarting individual pesticide processing...")
-    print(f"Image download: {'Enabled' if download_images else 'Disabled'}")
     
-    for i, (pest_code, pest_data) in enumerate(pesticides_to_process.items(), 1):
-        print(f"{i}/{len(pesticides_to_process)}: {pest_code}")
+    if args.usage_range_only:
+        print("Mode: Usage range CSV creation only")
         
-        try:
-            # Check if CSV already exists and we're in images-only mode
-            pest_dir = f"data/pesticides/{pest_code}"
-            if args.images_only and os.path.exists(pest_dir):
-                csv_files = [f for f in os.listdir(pest_dir) if f.endswith('.csv')]
-                if csv_files:
-                    print(f"  Skipping {pest_code} - CSV already exists")
-                    continue
+        for i, (pest_code, pest_data) in enumerate(pesticides_to_process.items(), 1):
+            print(f"{i}/{len(pesticides_to_process)}: {pest_code}")
             
-            result = splitter.create_pesticide_csv(pest_code, pest_data, download_images)
-            results.append(result)
+            try:
+                usage_result = splitter.create_usage_range_csv(pest_code, pest_data)
+                if usage_result:
+                    usage_range_results.append(usage_result)
+                
+                # Respectful delay
+                time.sleep(0.5)
+                
+            except Exception as e:
+                print(f"  Error processing usage range for {pest_code}: {e}")
+                continue
+    else:
+        print(f"Image download: {'Enabled' if download_images else 'Disabled'}")
+        
+        for i, (pest_code, pest_data) in enumerate(pesticides_to_process.items(), 1):
+            print(f"{i}/{len(pesticides_to_process)}: {pest_code}")
             
-            # Respectful delay
-            time.sleep(0.5)
-            
-        except Exception as e:
-            print(f"  Error processing {pest_code}: {e}")
-            continue
+            try:
+                # Check if CSV already exists and we're in images-only mode
+                pest_dir = f"data/pesticides/{pest_code}"
+                if args.images_only and os.path.exists(pest_dir):
+                    csv_files = [f for f in os.listdir(pest_dir) if f.endswith('.csv')]
+                    if csv_files:
+                        print(f"  Skipping {pest_code} - CSV already exists")
+                        continue
+                
+                result = splitter.create_pesticide_csv(pest_code, pest_data, download_images)
+                results.append(result)
+                
+                # Also create usage range CSV
+                usage_result = splitter.create_usage_range_csv(pest_code, pest_data)
+                if usage_result:
+                    usage_range_results.append(usage_result)
+                
+                # Respectful delay
+                time.sleep(0.5)
+                
+            except Exception as e:
+                print(f"  Error processing {pest_code}: {e}")
+                continue
     
     # Summary
     print(f"\\n=== Processing Complete ===")
-    print(f"Pesticides processed: {len(results)}")
     
-    if results:
-        total_records = sum(r['record_count'] for r in results)
-        total_registrations = sum(r['registration_count'] for r in results)
-        total_images = sum(r['image_count'] for r in results)
+    if args.usage_range_only:
+        print(f"Usage range CSVs created: {len(usage_range_results)}")
+        if usage_range_results:
+            total_usage_ranges = sum(r['usage_range_count'] for r in usage_range_results)
+            total_registrations = sum(r['registration_count'] for r in usage_range_results)
+            
+            print(f"Total usage range records: {total_usage_ranges}")
+            print(f"Total registrations processed: {total_registrations}")
+            print(f"Usage range data saved to: data/pesticides/[CODE_NAME]/[CODE_NAME]_usage_range.csv")
+            
+            # Show sample results
+            print(f"\\nSample usage range results:")
+            for result in usage_range_results[:5]:
+                csv_name = os.path.basename(result['csv_path'])
+                print(f"  {csv_name}: {result['usage_range_count']} usage records")
+    else:
+        print(f"Pesticides processed: {len(results)}")
+        print(f"Usage range CSVs created: {len(usage_range_results)}")
         
-        print(f"Total CSV records: {total_records}")
-        print(f"Total registrations: {total_registrations}")
-        print(f"Total images downloaded: {total_images}")
-        print(f"Data saved to: data/pesticides/[CODE_NAME]/")
-        print(f"Images saved to: data/images/[CODE_NAME]/")
-        
-        # Show sample results
-        print(f"\\nSample results:")
-        for result in results[:5]:
-            csv_name = os.path.basename(result['csv_path'])
-            print(f"  {csv_name}: {result['record_count']} records, {result['image_count']} images")
+        if results:
+            total_records = sum(r['record_count'] for r in results)
+            total_registrations = sum(r['registration_count'] for r in results)
+            total_images = sum(r['image_count'] for r in results)
+            
+            print(f"Total CSV records: {total_records}")
+            print(f"Total registrations: {total_registrations}")
+            print(f"Total images downloaded: {total_images}")
+            print(f"Data saved to: data/pesticides/[CODE_NAME]/")
+            print(f"Images saved to: data/images/[CODE_NAME]/")
+            
+            if usage_range_results:
+                total_usage_ranges = sum(r['usage_range_count'] for r in usage_range_results)
+                print(f"Total usage range records: {total_usage_ranges}")
+            
+            # Show sample results
+            print(f"\\nSample results:")
+            for result in results[:5]:
+                csv_name = os.path.basename(result['csv_path'])
+                print(f"  {csv_name}: {result['record_count']} records, {result['image_count']} images")
 
 if __name__ == '__main__':
     main()
