@@ -332,40 +332,88 @@ class PesticideSplitter:
         }
     
     def fetch_pesticide_list(self):
-        """Fetch pesticide list from Taiwan pesticide database"""
+        """Fetch complete pesticide list from Taiwan pesticide database API"""
         try:
             os.makedirs('data/regulatory', exist_ok=True)
             
-            print("Fetching pesticide list from government database...")
+            print("Fetching complete pesticide list from government database...")
             
-            # Try to get pesticide list from search page
-            search_url = f"{self.base_url}/information/Query/Pesticide"
-            response = self.session.get(search_url)
-            
-            if response.status_code != 200:
-                print("Could not access pesticide search page")
-                return pd.DataFrame()
-            
-            # For now, create a basic list with common pesticides from the usage data we already have
-            # This allows the script to work with the data we can collect
             pesticides = []
+            page = 1
+            page_size = 100  # Maximum allowed page size
             
-            # Add some common pesticide codes that we know exist
-            common_pesticides = [
-                {'代號': 'F011', '農藥名稱': '三賽唑'},
-                {'代號': 'F001', '農藥名稱': '2,4-D'},
-                {'代號': 'F005', '農藥名稱': '百克敏'},
-                {'代號': 'I001', '農藥名稱': '加保扶'},
-                {'代號': 'H001', '農藥名稱': '巴拉刈'},
-            ]
+            while True:
+                # Fetch page of pesticides
+                list_url = f"{self.base_url}/information/Query/PesticideList"
+                params = {
+                    'page': page,
+                    'pagesize': page_size
+                }
+                
+                response = self.session.get(list_url, params=params)
+                
+                if response.status_code != 200:
+                    print(f"Error fetching page {page}: HTTP {response.status_code}")
+                    break
+                
+                # Parse HTML table to extract pesticide data
+                soup = BeautifulSoup(response.text, 'html.parser')
+                
+                # Find the data table (second table on the page)
+                tables = soup.find_all('table')
+                if len(tables) < 2:
+                    print(f"No data table found on page {page}")
+                    break
+                
+                data_table = tables[1]  # Second table contains the data
+                tbody = data_table.find('tbody')
+                if not tbody:
+                    print(f"No table body found on page {page}")
+                    break
+                
+                rows = tbody.find_all('tr')
+                if not rows:
+                    print(f"No data rows found on page {page} - end of data")
+                    break
+                
+                # Extract pesticide data from each row
+                page_pesticides = []
+                for row in rows:
+                    cells = row.find_all('td')
+                    if len(cells) >= 4:  # Ensure we have enough columns
+                        try:
+                            pesticide = {
+                                '農藥名稱': cells[0].get_text(strip=True),  # Common name
+                                '代號': cells[1].get_text(strip=True),      # Code
+                                '原始英文廠牌名稱': cells[2].get_text(strip=True) if len(cells) > 2 else '',
+                                '登記廠商': cells[3].get_text(strip=True) if len(cells) > 3 else ''
+                            }
+                            page_pesticides.append(pesticide)
+                        except Exception as e:
+                            print(f"Error parsing row: {e}")
+                            continue
+                
+                if not page_pesticides:
+                    print(f"No pesticides extracted from page {page} - stopping")
+                    break
+                
+                pesticides.extend(page_pesticides)
+                print(f"Fetched page {page}: {len(page_pesticides)} pesticides (total: {len(pesticides)})")
+                
+                # Check if we've reached the end (less than full page)
+                if len(page_pesticides) < page_size:
+                    print("Reached end of data")
+                    break
+                
+                page += 1
+                time.sleep(0.5)  # Be respectful to the server
             
-            pesticides.extend(common_pesticides)
-            
+            # Create DataFrame and save
             df = pd.DataFrame(pesticides)
             csv_path = 'data/regulatory/taiwan_pesticide_list.csv'
             df.to_csv(csv_path, index=False, encoding='utf-8-sig')
             
-            print(f"Created basic pesticide list with {len(pesticides)} entries")
+            print(f"Successfully fetched {len(pesticides)} pesticides from government database")
             return df
             
         except Exception as e:
