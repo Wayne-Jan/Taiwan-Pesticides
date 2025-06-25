@@ -82,6 +82,87 @@ class PPMDataFetcher:
         print(f"Found {len(crop_links)} crop entries")
         return crop_links
     
+    def parse_table_with_tolerance(self, soup):
+        """Parse table data including hidden tolerance columns"""
+        all_data = []
+        
+        # Use pandas to get the main pesticide table structure, then enhance with tolerance data
+        try:
+            import pandas as pd
+            from io import StringIO
+            
+            # Get the table structure using pandas
+            dfs = pd.read_html(StringIO(str(soup)))
+            pesticide_df = None
+            
+            # Find the pesticide table
+            for i, df in enumerate(dfs):
+                if df.shape[0] > 1 and df.shape[1] > 3:
+                    if any('藥劑' in str(col) for col in df.columns):
+                        pesticide_df = df
+                        break
+            
+            if pesticide_df is None:
+                return all_data
+            
+            print(f"    Found pesticide table with {len(pesticide_df)} rows and {len(pesticide_df.columns)} columns")
+            
+            # Get tolerance header
+            tolerance_header = soup.find('th', {'id': lambda x: x and 'tolerance' in x.lower()})
+            tolerance_column_name = "殘留容許量(ppm)"
+            if tolerance_header:
+                tolerance_text = tolerance_header.get_text(strip=True)
+                if tolerance_text:
+                    tolerance_column_name = tolerance_text
+            
+            # Find all tolerance data cells
+            tolerance_cells = soup.find_all('td', {'id': lambda x: x and 'tolerance_td' in x.lower()})
+            print(f"    Found {len(tolerance_cells)} tolerance data cells")
+            
+            # Create tolerance data mapping by extracting row numbers from IDs
+            tolerance_data = {}
+            for cell in tolerance_cells:
+                cell_id = cell.get('id', '')
+                tolerance_text = cell.get_text(strip=True)
+                
+                # Extract row number from ID like "Tolerance_td39"
+                import re
+                match = re.search(r'tolerance_td(\d+)', cell_id.lower())
+                if match:
+                    row_num = int(match.group(1))
+                    tolerance_data[row_num] = tolerance_text
+            
+            # Convert pandas DataFrame to list of dictionaries and add tolerance data
+            for i, (idx, row) in enumerate(pesticide_df.iterrows()):
+                row_dict = row.to_dict()
+                
+                # Try to find corresponding tolerance data
+                # The tolerance row numbers seem to start from a base number
+                tolerance_text = ""
+                for tolerance_row_num, tolerance_value in tolerance_data.items():
+                    # Try different mapping strategies
+                    if tolerance_row_num - 38 == i:  # Adjust base offset as needed
+                        tolerance_text = tolerance_value
+                        break
+                    elif tolerance_row_num - 39 == i:
+                        tolerance_text = tolerance_value
+                        break
+                    elif tolerance_row_num - len(tolerance_data) + len(pesticide_df) == i:
+                        tolerance_text = tolerance_value
+                        break
+                
+                row_dict[tolerance_column_name] = tolerance_text
+                all_data.append(row_dict)
+            
+            if tolerance_data:
+                print(f"    Successfully added tolerance data to {len([r for r in all_data if r.get(tolerance_column_name)])} rows")
+            
+            return all_data
+            
+        except Exception as e:
+            print(f"    Error in enhanced parsing: {e}")
+            return all_data
+    
     def fetch_crop_pesticides(self, crop_url, crop_name, base_filename):
         """Fetch pesticide data for a specific crop and save immediately"""
         print(f"  Fetching data for: {crop_name}")
@@ -93,7 +174,33 @@ class PPMDataFetcher:
                 print(f"    Error: HTTP {response.status_code}")
                 return 0
             
-            # Parse tables using pandas
+            # Parse HTML to get both regular and tolerance data
+            soup = BeautifulSoup(response.text, 'html.parser')
+            
+            # Try custom parsing first to get tolerance data
+            custom_data = self.parse_table_with_tolerance(soup)
+            
+            if custom_data:
+                print(f"    Found {len(custom_data)} records with custom parsing")
+                
+                # Convert to DataFrame
+                df = pd.DataFrame(custom_data)
+                
+                # Add metadata
+                df['作物名稱'] = crop_name
+                df['資料來源URL'] = crop_url
+                df['擷取時間'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                
+                # Save immediately to usage folder
+                os.makedirs('data/usage', exist_ok=True)
+                safe_crop_name = re.sub(r'[^\w\-_\u4e00-\u9fff]', '_', crop_name)
+                filename = f"data/usage/{safe_crop_name}_{base_filename}"
+                df.to_csv(filename, index=False, encoding='utf-8-sig')
+                print(f"    Saved {len(df)} records to {filename}")
+                
+                return len(df)
+            
+            # Fallback to pandas HTML parsing
             try:
                 dfs = pd.read_html(StringIO(response.text))
                 
