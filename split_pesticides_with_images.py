@@ -245,7 +245,8 @@ class PesticideSplitter:
             safe_pest_name = re.sub(r'[^\w\-_\u4e00-\u9fff]', '_', pest_name)
             folder_name = f"{pest_code}_{safe_pest_name}"
             pest_dir = f"data/pesticides/{folder_name}"
-            os.makedirs(pest_dir, exist_ok=True)
+            labels_dir = f"{pest_dir}/labels"
+            os.makedirs(labels_dir, exist_ok=True)
             
             # Get full URL if it's a relative path
             if image_url.startswith('/'):
@@ -281,7 +282,7 @@ class PesticideSplitter:
                     name, ext = os.path.splitext(safe_filename)
                     safe_filename = f"{permit_num}_{safe_filename}"
                 
-                file_path = os.path.join(pest_dir, safe_filename)
+                file_path = os.path.join(labels_dir, safe_filename)
                 
                 # Save image
                 with open(file_path, 'wb') as f:
@@ -483,7 +484,7 @@ class PesticideSplitter:
         df = pd.DataFrame(pesticide_records)
         
         # Create pesticide-specific directory with full name
-        safe_pest_name = re.sub(r'[^\\w\\-_\\u4e00-\\u9fff]', '_', pest_name)
+        safe_pest_name = re.sub(r'[^\w\-_\u4e00-\u9fff]', '_', pest_name)
         folder_name = f"{pest_code}_{safe_pest_name}"
         pest_dir = f"data/pesticides/{folder_name}"
         os.makedirs(pest_dir, exist_ok=True)
