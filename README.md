@@ -140,4 +140,4 @@ data/
 
 ## 致謝
 
-本專案基於 [Raingel/Pesticides](https://github.com/Raingel/Pesticides/) 專案開發。
+本專案基於 [Raingel/Pesticides](https://github.com/Raingel/Pesticides/) 專案改進，更新政府網站網址。
